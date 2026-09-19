@@ -4,6 +4,10 @@
    <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#ffffff">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="高さを測る">
+  <link rel="apple-touch-icon" href="192.png">
   <title>高さ計算機</title>
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="192.png" type="image/png">
@@ -107,31 +111,80 @@
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null;
     let isListening = false;
+    let isRecognitionRunning = false;
+    let isSpeaking = false;
+    let restartTimer = null;
+
+    function setMicUI(listening, message = null) {
+        micBtn.classList.toggle('listening', listening);
+        micBtn.textContent = listening ? '🔴 聞き取り中...' : '🎤 音声入力をON';
+        if (message) statusMsg.textContent = message;
+    }
+
+    function safeStartRecognition(delay = 250) {
+        clearTimeout(restartTimer);
+        restartTimer = setTimeout(() => {
+            if (!recognition || !isListening || isSpeaking || isRecognitionRunning) return;
+            try { recognition.start(); } catch (e) { /* iOSの二重startを無視 */ }
+        }, delay);
+    }
+
+    function safeStopRecognition() {
+        clearTimeout(restartTimer);
+        if (!recognition || !isRecognitionRunning) return;
+        try { recognition.stop(); } catch (e) {}
+    }
 
     if (SpeechRecognition) {
         recognition = new SpeechRecognition();
         recognition.lang = 'ja-JP';
-        recognition.interimResults = false;
-        recognition.continuous = true;
+        recognition.interimResults = true;
+        // iPhone/Safariでは continuous=true が不安定なため、1発認識を安全に再起動する
+        recognition.continuous = false;
+        recognition.maxAlternatives = 3;
+
+        recognition.onstart = () => {
+            isRecognitionRunning = true;
+            if (isListening && !isSpeaking) {
+                setMicUI(true, '聞き取り中です。「斜面 100」のように話してください');
+                statusMsg.style.color = '#27ae60';
+            }
+        };
 
         recognition.onresult = (event) => {
-            const lastResultIndex = event.results.length - 1;
-            const text = event.results[lastResultIndex][0].transcript.trim();
-            parseSpeech(text);
+            let finalText = '';
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                if (event.results[i].isFinal) finalText += event.results[i][0].transcript;
+            }
+            if (finalText.trim()) parseSpeech(finalText.trim());
         };
 
         recognition.onerror = (event) => {
-            statusMsg.textContent = "音声認識エラー: " + event.error;
+            isRecognitionRunning = false;
+            if (!isListening) return;
+            if (event.error === 'no-speech' || event.error === 'aborted') {
+                statusMsg.textContent = '声を待っています…';
+            } else if (event.error === 'audio-capture') {
+                statusMsg.textContent = 'マイクを使えません。iPhoneのマイク許可とイヤホン接続を確認してください';
+                statusMsg.style.color = '#e74c3c';
+            } else if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+                isListening = false;
+                setMicUI(false, 'マイクが許可されていません。Safariのサイト設定でマイクを許可してください');
+                statusMsg.style.color = '#e74c3c';
+            } else {
+                statusMsg.textContent = '音声認識エラー: ' + event.error;
+                statusMsg.style.color = '#e67e22';
+            }
         };
 
         recognition.onend = () => {
-            if (isListening) {
-                recognition.start();
-            }
+            isRecognitionRunning = false;
+            // 読み上げ中は再開しない。読み上げ終了後に再開する
+            if (isListening && !isSpeaking) safeStartRecognition(350);
         };
     } else {
         micBtn.style.display = 'none';
-        statusMsg.textContent = "お使いのブラウザは音声入力に対応していません";
+        statusMsg.textContent = 'このブラウザでは音声入力を利用できません。iPhoneではSafariで開いてください';
     }
 
     function toggleSpeech() {
@@ -139,20 +192,17 @@
 
         if (isListening) {
             isListening = false;
-            recognition.stop();
-            micBtn.classList.remove('listening');
-            micBtn.textContent = '🎤 音声入力をON';
-            statusMsg.textContent = "音声入力を停止しました";
-            statusMsg.style.color = "#666";
+            safeStopRecognition();
+            speechSynthesis.cancel();
+            isSpeaking = false;
+            setMicUI(false, '音声入力を停止しました');
+            statusMsg.style.color = '#666';
         } else {
+            // iOSではユーザー操作（このタップ）から直接startするのが重要
             isListening = true;
-            recognition.start();
-            micBtn.classList.add('listening');
-            micBtn.textContent = '🔴 聞き取り中...';
-            statusMsg.textContent = "「斜面 100」のように話してください";
-            statusMsg.style.color = "#27ae60";
-
-            speakText("音声入力を開始します");
+            setMicUI(true, 'マイクを準備しています…');
+            statusMsg.style.color = '#27ae60';
+            try { recognition.start(); } catch (e) { safeStartRecognition(300); }
         }
     }
 
@@ -220,33 +270,46 @@
         speakWithRecognitionPause(`高さは ${calculatedH} です`);
     }
 
-    // 音声読み上げ時にマイクが自分の声を拾うのを防止する処理
+    // 読み上げ中は認識を完全停止し、イヤホン利用時の自己認識・競合を防ぐ
     function speakWithRecognitionPause(text) {
-        if (recognition && isListening) {
-            recognition.stop();
-            setTimeout(() => {
-                speakText(text, () => {
-                    if (isListening) recognition.start();
-                });
-            }, 200);
-        } else {
-            speakText(text);
-        }
+        const shouldResume = isListening;
+        isSpeaking = true;
+        safeStopRecognition();
+        clearTimeout(restartTimer);
+
+        // iOSはstop直後のTTS開始が競合することがあるため少し待つ
+        setTimeout(() => {
+            speakText(text, () => {
+                isSpeaking = false;
+                if (shouldResume && isListening) safeStartRecognition(500);
+            });
+        }, 300);
     }
 
     function speakText(text, onEndCallback = null) {
-        if ('speechSynthesis' in window && text !== "") {
-            speechSynthesis.cancel();
-            const uttr = new SpeechSynthesisUtterance(text);
-            uttr.lang = 'ja-JP';
-            uttr.rate = 1.0;
-            
-            if (onEndCallback) {
-                uttr.onend = onEndCallback;
-            }
-            
-            speechSynthesis.speak(uttr);
+        if (!('speechSynthesis' in window) || !text) {
+            isSpeaking = false;
+            if (onEndCallback) onEndCallback();
+            return;
         }
+
+        speechSynthesis.cancel();
+        const uttr = new SpeechSynthesisUtterance(text);
+        uttr.lang = 'ja-JP';
+        uttr.rate = 1.0;
+
+        let finished = false;
+        const finish = () => {
+            if (finished) return;
+            finished = true;
+            if (onEndCallback) onEndCallback();
+        };
+        uttr.onend = finish;
+        uttr.onerror = finish;
+        speechSynthesis.speak(uttr);
+
+        // iOSでまれにonendが来ない場合の保険
+        setTimeout(finish, Math.max(2500, text.length * 220));
     }
 
     function round(val) {
@@ -260,14 +323,6 @@
         statusMsg.textContent = "「斜面 100」や「角度 30」と話しかけてください";
         statusMsg.style.color = "#e67e22";
         speakWithRecognitionPause("リセットしました");
-    }
-
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js')
-          .then(reg => console.log('オフライン準備完了', reg))
-          .catch(err => console.error('エラー:', err));
-      });
     }
 </script>
 
