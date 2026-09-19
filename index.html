@@ -96,7 +96,7 @@
         <input type="number" id="height" readonly placeholder="計算結果">
     </div>
 
-    <div class="status" id="statusMessage">「斜面 100」や「角度 30」と話しかけてください</div>
+    <div class="status" id="statusMessage">「斜面 100」「角度 30」「計算」「リセット」「終了」と話しかけてください</div>
 </div>
 
 <script>
@@ -225,6 +225,9 @@
         } else if (text.includes('計算') || text.includes('けいさん')) {
             calculate();
             return;
+        } else if (text.includes('終了') || text.includes('しゅうりょう') || text.includes('終わり')) {
+            exitApp();
+            return;
         } else if (text.includes('リセット')) {
             resetForm();
             return;
@@ -271,7 +274,7 @@
     }
 
     // 読み上げ中は認識を完全停止し、イヤホン利用時の自己認識・競合を防ぐ
-    function speakWithRecognitionPause(text) {
+    function speakWithRecognitionPause(text, afterSpeak = null) {
         const shouldResume = isListening;
         isSpeaking = true;
         safeStopRecognition();
@@ -281,7 +284,8 @@
         setTimeout(() => {
             speakText(text, () => {
                 isSpeaking = false;
-                if (shouldResume && isListening) safeStartRecognition(500);
+                if (afterSpeak) afterSpeak();
+                if (shouldResume && isListening) safeStartRecognition(650);
             });
         }, 300);
     }
@@ -317,12 +321,37 @@
     }
 
     function resetForm() {
-        ['hypotenuse', 'angle', 'height'].forEach(key => {
-            inputs[key].value = '';
-        });
-        statusMsg.textContent = "「斜面 100」や「角度 30」と話しかけてください";
+        statusMsg.textContent = "リセットします";
         statusMsg.style.color = "#e67e22";
-        speakWithRecognitionPause("リセットしました");
+
+        // 先に声で知らせてから入力値を消す
+        speakWithRecognitionPause("リセットします", () => {
+            ['hypotenuse', 'angle', 'height'].forEach(key => {
+                inputs[key].value = '';
+            });
+            statusMsg.textContent = "リセットしました。次の入力をどうぞ";
+            statusMsg.style.color = "#27ae60";
+        });
+    }
+
+    function exitApp() {
+        // WebページからiPhoneのアプリ自体を強制終了することはできないため、
+        // 音声入力・読み上げを安全に終了して「終了状態」にする。
+        isListening = false;
+        clearTimeout(restartTimer);
+        safeStopRecognition();
+        setMicUI(false, "終了しました");
+        statusMsg.style.color = "#666";
+
+        isSpeaking = true;
+        setTimeout(() => {
+            speakText("アプリを終了します", () => {
+                isSpeaking = false;
+                statusMsg.textContent = "終了しました";
+                // ブラウザ仕様上、通常は閉じないが、許可される環境だけ試す
+                try { window.close(); } catch (e) {}
+            });
+        }, 300);
     }
 </script>
 
