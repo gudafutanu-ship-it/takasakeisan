@@ -290,30 +290,73 @@
         }, 300);
     }
 
+    let selectedVoice = null;
+
+    function prepareJapaneseVoice() {
+        if (!('speechSynthesis' in window)) return;
+        const voices = speechSynthesis.getVoices();
+        selectedVoice =
+            voices.find(v => v.lang === 'ja-JP' && /Kyoko|Otoya|Hattori/i.test(v.name)) ||
+            voices.find(v => v.lang === 'ja-JP') ||
+            voices.find(v => /^ja/i.test(v.lang)) ||
+            null;
+    }
+
+    if ('speechSynthesis' in window) {
+        prepareJapaneseVoice();
+        speechSynthesis.onvoiceschanged = prepareJapaneseVoice;
+    }
+
+    function unlockSpeech() {
+        if (!('speechSynthesis' in window)) return;
+        // iPhone Safariはユーザー操作中に一度speechSynthesisを起動しておくと
+        // その後の音声認識コールバックからの読み上げが安定しやすい。
+        prepareJapaneseVoice();
+        const u = new SpeechSynthesisUtterance(' ');
+        u.lang = 'ja-JP';
+        u.volume = 0.01;
+        speechSynthesis.cancel();
+        speechSynthesis.speak(u);
+    }
+
     function speakText(text, onEndCallback = null) {
         if (!('speechSynthesis' in window) || !text) {
-            isSpeaking = false;
             if (onEndCallback) onEndCallback();
             return;
         }
 
+        prepareJapaneseVoice();
+
+        // iOSではcancel直後にspeakすると無音になることがあるため、
+        // cancel → 短い待ち → speak の順にする。
         speechSynthesis.cancel();
-        const uttr = new SpeechSynthesisUtterance(text);
-        uttr.lang = 'ja-JP';
-        uttr.rate = 1.0;
 
-        let finished = false;
-        const finish = () => {
-            if (finished) return;
-            finished = true;
-            if (onEndCallback) onEndCallback();
-        };
-        uttr.onend = finish;
-        uttr.onerror = finish;
-        speechSynthesis.speak(uttr);
+        setTimeout(() => {
+            const uttr = new SpeechSynthesisUtterance(text);
+            uttr.lang = 'ja-JP';
+            uttr.rate = 0.95;
+            uttr.pitch = 1.0;
+            uttr.volume = 1.0;
+            if (selectedVoice) uttr.voice = selectedVoice;
 
-        // iOSでまれにonendが来ない場合の保険
-        setTimeout(finish, Math.max(2500, text.length * 220));
+            let finished = false;
+            const finish = () => {
+                if (finished) return;
+                finished = true;
+                if (onEndCallback) onEndCallback();
+            };
+
+            uttr.onend = finish;
+            uttr.onerror = (e) => {
+                statusMsg.textContent = "読み上げエラー: " + (e.error || "unknown");
+                finish();
+            };
+
+            speechSynthesis.speak(uttr);
+
+            // iOSで一時停止状態が残った場合の保険
+            if (speechSynthesis.paused) speechSynthesis.resume();
+        }, 180);
     }
 
     function round(val) {
