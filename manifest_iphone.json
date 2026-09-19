@@ -1,7 +1,10 @@
 {
+  "id": "./",
   "name": "高さを測る",
   "short_name": "高さを測る",
+  "lang": "ja-JP",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#ffffff",
